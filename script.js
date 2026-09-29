@@ -112,8 +112,8 @@ const monthFormatter = new Intl.DateTimeFormat("zh-TW", { year: "numeric", month
 const config = window.PHONE_RENTAL_CONFIG || {};
 const placeholderEndpoint = "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE";
 const bookingTitleHtml = '預約表單 ｜ <span class="booking-title-note">聯絡並交付定金後才會鎖定檔期</span>';
-const availabilityFetchTimeoutMs = 10000;
-const availabilityFetchAttempts = 2;
+const availabilityFetchTimeoutMs = 45000;
+const availabilitySlowNoticeMs = 8000;
 const showcaseAssetVersion = "showcase-20260929-89";
 const showcaseCategories = [
   {
@@ -1468,7 +1468,13 @@ function loadAvailability() {
   requestUrl.searchParams.set("action", "availability");
   requestUrl.searchParams.set("selectedItems", packageInfo.selectedItemIds.join(","));
 
-  fetchAvailabilityWithRetry(requestUrl, requestId, requestKey)
+  const slowNoticeId = window.setTimeout(() => {
+    if (requestId === availabilityRequestId && requestKey === latestAvailabilityKey) {
+      availabilityStatus.textContent = "Google 系統正在啟動，請稍候...";
+    }
+  }, availabilitySlowNoticeMs);
+
+  fetchAvailabilityRequest(requestUrl)
     .then((payload) => {
       if (requestId !== availabilityRequestId || requestKey !== latestAvailabilityKey) {
         return;
@@ -1506,30 +1512,21 @@ function loadAvailability() {
       }
     })
     .finally(() => {
+      window.clearTimeout(slowNoticeId);
+
       if (requestId === availabilityRequestId) {
         availabilityAbortController = null;
       }
     });
 }
 
-function fetchAvailabilityWithRetry(requestUrl, requestId, requestKey, attempt = 1) {
+function fetchAvailabilityRequest(requestUrl) {
   const controller = new AbortController();
-  const attemptUrl = new URL(requestUrl);
-  attemptUrl.searchParams.set("cachebust", `${Date.now()}-${attempt}`);
+  const requestUrlWithCachebust = new URL(requestUrl);
+  requestUrlWithCachebust.searchParams.set("cachebust", String(Date.now()));
   availabilityAbortController = controller;
 
-  return fetchAvailabilityOnce(attemptUrl.toString(), controller)
-    .catch((error) => {
-      const isCurrentRequest = requestId === availabilityRequestId && requestKey === latestAvailabilityKey;
-      const canRetry = isCurrentRequest && error.name !== "AbortError" && attempt < availabilityFetchAttempts;
-
-      if (!canRetry) {
-        throw error;
-      }
-
-      availabilityStatus.textContent = "同步較慢，正在重新嘗試...";
-      return fetchAvailabilityWithRetry(requestUrl, requestId, requestKey, attempt + 1);
-    });
+  return fetchAvailabilityOnce(requestUrlWithCachebust.toString(), controller);
 }
 
 function fetchAvailabilityOnce(requestUrl, controller) {
