@@ -112,7 +112,8 @@ const monthFormatter = new Intl.DateTimeFormat("zh-TW", { year: "numeric", month
 const config = window.PHONE_RENTAL_CONFIG || {};
 const placeholderEndpoint = "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE";
 const bookingTitleHtml = '預約表單 ｜ <span class="booking-title-note">聯絡並交付定金後才會鎖定檔期</span>';
-const availabilityFetchTimeoutMs = 20000;
+const availabilityFetchTimeoutMs = 10000;
+const availabilityFetchAttempts = 2;
 const showcaseAssetVersion = "showcase-20260929-89";
 const showcaseCategories = [
   {
@@ -1466,26 +1467,8 @@ function loadAvailability() {
   const requestUrl = new URL(endpoint);
   requestUrl.searchParams.set("action", "availability");
   requestUrl.searchParams.set("selectedItems", packageInfo.selectedItemIds.join(","));
-  requestUrl.searchParams.set("cachebust", String(Date.now()));
 
-  const controller = new AbortController();
-  const timeoutId = window.setTimeout(() => {
-    controller.abort();
-  }, availabilityFetchTimeoutMs);
-  availabilityAbortController = controller;
-
-  fetch(requestUrl.toString(), {
-    method: "GET",
-    cache: "no-store",
-    signal: controller.signal
-  })
-    .then((response) => {
-      if (!response.ok) {
-        throw new Error("Availability request failed");
-      }
-
-      return response.json();
-    })
+  fetchAvailabilityWithRetry(requestUrl, requestId, requestKey)
     .then((payload) => {
       if (requestId !== availabilityRequestId || requestKey !== latestAvailabilityKey) {
         return;
@@ -1515,7 +1498,7 @@ function loadAvailability() {
         availabilitySyncingKey = "";
         availabilityReadyKey = "";
         selectedDates = new Set();
-        availabilityStatus.textContent = error.name === "AbortError"
+        availabilityStatus.textContent = error.name === "AbortError" || error.name === "TimeoutError"
           ? "同步逾時，請點 2 選日期重新同步。"
           : "目前無法同步可租狀態，請稍後再試。";
         renderCalendar();
@@ -1523,11 +1506,57 @@ function loadAvailability() {
       }
     })
     .finally(() => {
-      window.clearTimeout(timeoutId);
-
       if (requestId === availabilityRequestId) {
         availabilityAbortController = null;
       }
+    });
+}
+
+function fetchAvailabilityWithRetry(requestUrl, requestId, requestKey, attempt = 1) {
+  const controller = new AbortController();
+  const attemptUrl = new URL(requestUrl);
+  attemptUrl.searchParams.set("cachebust", `${Date.now()}-${attempt}`);
+  availabilityAbortController = controller;
+
+  return fetchAvailabilityOnce(attemptUrl.toString(), controller)
+    .catch((error) => {
+      const isCurrentRequest = requestId === availabilityRequestId && requestKey === latestAvailabilityKey;
+      const canRetry = isCurrentRequest && error.name !== "AbortError" && attempt < availabilityFetchAttempts;
+
+      if (!canRetry) {
+        throw error;
+      }
+
+      availabilityStatus.textContent = "同步較慢，正在重新嘗試...";
+      return fetchAvailabilityWithRetry(requestUrl, requestId, requestKey, attempt + 1);
+    });
+}
+
+function fetchAvailabilityOnce(requestUrl, controller) {
+  let timeoutId = 0;
+  const timeoutPromise = new Promise((_, reject) => {
+    timeoutId = window.setTimeout(() => {
+      const error = new Error("Availability request timed out");
+      error.name = "TimeoutError";
+      reject(error);
+      controller.abort();
+    }, availabilityFetchTimeoutMs);
+  });
+  const requestPromise = fetch(requestUrl, {
+    method: "GET",
+    cache: "no-store",
+    signal: controller.signal
+  }).then((response) => {
+    if (!response.ok) {
+      throw new Error("Availability request failed");
+    }
+
+    return response.json();
+  });
+
+  return Promise.race([requestPromise, timeoutPromise])
+    .finally(() => {
+      window.clearTimeout(timeoutId);
     });
 }
 
