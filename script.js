@@ -114,6 +114,8 @@ const placeholderEndpoint = "PASTE_YOUR_GOOGLE_APPS_SCRIPT_WEB_APP_URL_HERE";
 const bookingTitleHtml = '預約表單 ｜ <span class="booking-title-note">聯絡並交付定金後才會鎖定檔期</span>';
 const availabilityFetchTimeoutMs = 45000;
 const availabilitySlowNoticeMs = 8000;
+const availabilitySnapshotMaxAgeMs = 120000;
+const availabilitySnapshotStorageKey = "phoneRentalAvailabilitySnapshotV1";
 const showcaseAssetVersion = "showcase-20260929-89";
 const showcaseCategories = [
   {
@@ -280,6 +282,8 @@ let availabilityReadyKey = "";
 let availabilitySyncingKey = "";
 let availabilityRequestId = 0;
 let availabilityAbortController = null;
+let availabilitySnapshot = readAvailabilitySnapshot();
+let availabilitySnapshotPromise = null;
 let activeShowcaseCategoryId = showcaseCategories[0]?.id || "";
 
 init();
@@ -295,6 +299,7 @@ function init() {
   renderCalendar();
   updateSelectionSummary();
   syncPageFromHash(false);
+  prefetchAvailabilitySnapshot();
 }
 
 function bindEvents() {
@@ -1326,7 +1331,6 @@ async function handleSubmit(event) {
 
   try {
     const endpoint = getAppsScriptUrl();
-    reservationId = endpoint ? await getNextReservationId(phone) : reservationId;
     const payload = new FormData(form);
     const breakdown = getRentalBreakdown(packageInfo, dates, { includeLocationFees: true });
     const dailyRate = breakdown.lines.reduce((total, line) => total + line.dailyRate, 0);
@@ -1336,7 +1340,6 @@ async function handleSubmit(event) {
       ? packageInfo.depositNoId
       : packageInfo.depositWithId;
 
-    payload.set("reservationId", reservationId);
     payload.set("selectedItems", selectedItemIds.join(","));
     payload.set("itemNames", packageInfo.displayName);
     payload.set("model", packageInfo.id);
@@ -1372,15 +1375,26 @@ async function handleSubmit(event) {
         `目前是測試模式，資料尚未寫入 Google Sheet。預約編號 ${reservationId} 已暫存在這台瀏覽器。`
       );
     } else {
-      await fetch(endpoint, {
+      const response = await fetch(endpoint, {
         method: "POST",
-        mode: "no-cors",
         body: payload
       });
+
+      if (!response.ok) {
+        throw new Error("預約服務目前無法回應，請稍後再試。");
+      }
+
+      const result = await response.json();
+
+      if (!result || !result.ok || !result.reservationId) {
+        throw new Error(result?.error || "預約資料未成功寫入，請稍後再試。");
+      }
+
+      reservationId = result.reservationId;
       completeReservation(reservationId);
     }
   } catch (error) {
-    showStatus("error", "送出時遇到問題，請稍後再試，或直接用 thread 聯絡店家。");
+    showStatus("error", error.message || "送出時遇到問題，請稍後再試，或直接用 thread 聯絡店家。");
   } finally {
     submitButton.disabled = false;
     submitButton.textContent = "送出預約";
@@ -1388,6 +1402,7 @@ async function handleSubmit(event) {
 }
 
 function completeReservation(reservationId) {
+  clearAvailabilitySnapshot();
   showSuccessDialog(reservationId);
 }
 
@@ -1425,11 +1440,6 @@ function loadAvailability() {
   const requestId = availabilityRequestId + 1;
   availabilityRequestId = requestId;
 
-  if (availabilityAbortController) {
-    availabilityAbortController.abort();
-    availabilityAbortController = null;
-  }
-
   if (!packageInfo) {
     latestAvailabilityKey = "";
     availabilityReadyKey = "";
@@ -1464,21 +1474,19 @@ function loadAvailability() {
     return;
   }
 
-  const requestUrl = new URL(endpoint);
-  requestUrl.searchParams.set("action", "availability");
-  requestUrl.searchParams.set("selectedItems", packageInfo.selectedItemIds.join(","));
-
   const slowNoticeId = window.setTimeout(() => {
     if (requestId === availabilityRequestId && requestKey === latestAvailabilityKey) {
       availabilityStatus.textContent = "Google 系統正在啟動，請稍候...";
     }
   }, availabilitySlowNoticeMs);
 
-  fetchAvailabilityRequest(requestUrl)
-    .then((payload) => {
+  getAvailabilitySnapshot()
+    .then((snapshot) => {
       if (requestId !== availabilityRequestId || requestKey !== latestAvailabilityKey) {
         return;
       }
+
+      const payload = filterAvailabilityPayloadForItems(snapshot, packageInfo.selectedItemIds);
 
       if (!payload || !payload.ok || !Array.isArray(payload.unavailableDates)) {
         throw new Error("Invalid availability response");
@@ -1513,20 +1521,131 @@ function loadAvailability() {
     })
     .finally(() => {
       window.clearTimeout(slowNoticeId);
-
-      if (requestId === availabilityRequestId) {
-        availabilityAbortController = null;
-      }
     });
 }
 
-function fetchAvailabilityRequest(requestUrl) {
+function prefetchAvailabilitySnapshot() {
+  if (!getAppsScriptUrl()) {
+    return;
+  }
+
+  getAvailabilitySnapshot().catch(() => {});
+}
+
+function getAvailabilitySnapshot() {
+  if (isAvailabilitySnapshotFresh(availabilitySnapshot)) {
+    return Promise.resolve(availabilitySnapshot.payload);
+  }
+
+  if (availabilitySnapshotPromise) {
+    return availabilitySnapshotPromise;
+  }
+
+  const endpoint = getAppsScriptUrl();
+
+  if (!endpoint) {
+    return Promise.reject(new Error("Availability endpoint is not configured"));
+  }
+
+  const requestUrl = new URL(endpoint);
+  requestUrl.searchParams.set("action", "availability");
   const controller = new AbortController();
-  const requestUrlWithCachebust = new URL(requestUrl);
+  const requestUrlWithCachebust = new URL(requestUrl.toString());
   requestUrlWithCachebust.searchParams.set("cachebust", String(Date.now()));
   availabilityAbortController = controller;
 
-  return fetchAvailabilityOnce(requestUrlWithCachebust.toString(), controller);
+  availabilitySnapshotPromise = fetchAvailabilityOnce(requestUrlWithCachebust.toString(), controller)
+    .then((payload) => {
+      if (!payload || !payload.ok || !Array.isArray(payload.unavailableDates)) {
+        throw new Error("Invalid availability response");
+      }
+
+      availabilitySnapshot = {
+        savedAt: Date.now(),
+        payload
+      };
+      writeAvailabilitySnapshot(availabilitySnapshot);
+      return payload;
+    })
+    .finally(() => {
+      availabilitySnapshotPromise = null;
+      availabilityAbortController = null;
+    });
+
+  return availabilitySnapshotPromise;
+}
+
+function isAvailabilitySnapshotFresh(snapshot) {
+  return Boolean(
+    snapshot &&
+    snapshot.payload &&
+    Number.isFinite(snapshot.savedAt) &&
+    Date.now() - snapshot.savedAt < availabilitySnapshotMaxAgeMs
+  );
+}
+
+function readAvailabilitySnapshot() {
+  try {
+    const snapshot = JSON.parse(sessionStorage.getItem(availabilitySnapshotStorageKey) || "null");
+    return isAvailabilitySnapshotFresh(snapshot) ? snapshot : null;
+  } catch (error) {
+    return null;
+  }
+}
+
+function writeAvailabilitySnapshot(snapshot) {
+  try {
+    sessionStorage.setItem(availabilitySnapshotStorageKey, JSON.stringify(snapshot));
+  } catch (error) {}
+}
+
+function clearAvailabilitySnapshot() {
+  availabilitySnapshot = null;
+
+  try {
+    sessionStorage.removeItem(availabilitySnapshotStorageKey);
+  } catch (error) {}
+}
+
+function filterAvailabilityPayloadForItems(payload, itemIds) {
+  const requestedLabels = new Set(
+    itemIds
+      .map((itemId) => itemMap.get(itemId))
+      .filter(Boolean)
+      .map((item) => [item.name, item.spec].filter(Boolean).join(" "))
+  );
+  const unavailableItemsByDate = {};
+  const pendingReservationsByDate = {};
+
+  Object.entries(payload.unavailableItemsByDate || {}).forEach(([date, labels]) => {
+    const matchingLabels = labels.filter((label) => requestedLabels.has(label));
+
+    if (matchingLabels.length) {
+      unavailableItemsByDate[date] = matchingLabels;
+    }
+  });
+
+  Object.entries(payload.pendingReservationsByDate || {}).forEach(([date, reservations]) => {
+    const matchingReservations = reservations
+      .map((reservation) => {
+        const matchingItems = (reservation.items || []).filter((label) => requestedLabels.has(label));
+        return matchingItems.length ? { ...reservation, items: matchingItems } : null;
+      })
+      .filter(Boolean);
+
+    if (matchingReservations.length) {
+      pendingReservationsByDate[date] = matchingReservations;
+    }
+  });
+
+  return {
+    ...payload,
+    unavailableDates: Object.keys(unavailableItemsByDate).sort(),
+    unavailableItemsByDate,
+    pendingDates: Object.keys(pendingReservationsByDate).sort(),
+    pendingReservationsByDate,
+    requestedItems: itemIds.slice()
+  };
 }
 
 function fetchAvailabilityOnce(requestUrl, controller) {
@@ -2018,39 +2137,6 @@ function getAppsScriptUrl() {
   }
 
   return endpoint;
-}
-
-async function getNextReservationId(phone) {
-  const endpoint = getAppsScriptUrl();
-
-  if (!endpoint) {
-    return createReservationId(phone);
-  }
-
-  try {
-    const url = new URL(endpoint);
-    url.searchParams.set("action", "nextReservationId");
-    url.searchParams.set("phone", phone);
-    url.searchParams.set("cachebust", String(Date.now()));
-
-    const response = await fetch(url.toString(), {
-      method: "GET",
-      cache: "no-store",
-      credentials: "omit"
-    });
-
-    if (!response.ok) {
-      throw new Error("Unable to get reservation id");
-    }
-
-    const payload = await response.json();
-
-    if (payload && payload.ok && payload.reservationId) {
-      return payload.reservationId;
-    }
-  } catch (error) {}
-
-  return createReservationId(phone);
 }
 
 function saveDemoReservation(payload) {

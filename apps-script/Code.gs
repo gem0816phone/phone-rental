@@ -16,7 +16,8 @@ const ITEM_LABELS = {
 };
 const MINIMUM_SINGLE_RENTAL_DAYS = 2;
 const LOCATION_FEE_WAIVER_MIN_DAYS = 3;
-const AVAILABILITY_CACHE_SECONDS = 15;
+const AVAILABILITY_CACHE_SECONDS = 120;
+const AVAILABILITY_CACHE_PROPERTY = "AVAILABILITY_CACHE_JSON";
 const STATUS_OPTIONS = ["待定", "已確認", "已取消", "新預約"];
 const TELEGRAM_BOT_TOKEN_PROPERTY = "TELEGRAM_BOT_TOKEN";
 const TELEGRAM_CHAT_ID_PROPERTY = "TELEGRAM_CHAT_ID";
@@ -216,14 +217,23 @@ function installPhoneRentalManagerTriggers_(spreadsheet) {
 }
 
 function onContractManagerEdit_(e) {
-  if (!e || !e.range || text_(e.value).toUpperCase() !== "TRUE") {
+  if (!e || !e.range) {
     return;
   }
 
   const range = e.range;
   const sheet = range.getSheet();
 
-  if (sheet.getName() !== CONTRACT_MANAGER_SHEET_NAME || range.getColumn() !== 2) {
+  if (sheet.getName() === SHEET_NAME) {
+    clearAvailabilityCache_();
+    return;
+  }
+
+  if (
+    text_(e.value).toUpperCase() !== "TRUE" ||
+    sheet.getName() !== CONTRACT_MANAGER_SHEET_NAME ||
+    range.getColumn() !== 2
+  ) {
     return;
   }
 
@@ -351,15 +361,15 @@ function doPost(e) {
     const requestedItemIds = getRequestedItemIds_(data);
     validate_(data, requestedDates, requestedItemIds);
 
-    const bookedDates = getBookedDateSet_(requestedItemIds);
+    const sheet = getReservationSheet_({ skipFormat: true });
+    const headers = ensureHeaders_(sheet, { skipFormat: true });
+    const bookedDates = getBookedDateSet_(requestedItemIds, sheet, headers);
     const conflicts = requestedDates.filter((date) => bookedDates[date]);
 
     if (conflicts.length) {
       throw new Error(`日期已滿：${conflicts.join(", ")}`);
     }
 
-    const sheet = getReservationSheet_();
-    const headers = ensureHeaders_(sheet);
     const reservationId = getNextReservationIdForPhone_(data.phone, sheet, headers);
     const rowData = {
       "建立時間": new Date(),
@@ -390,7 +400,6 @@ function doPost(e) {
     };
 
     appendReservationRow_(sheet, headers, rowData);
-    formatReservationSheet_(sheet, headers);
     clearAvailabilityCache_();
     notifyTelegramReservation_(rowData, requestedDates);
 
@@ -423,10 +432,16 @@ function getReservationSheet_(options) {
   return sheet;
 }
 
-function ensureHeaders_(sheet) {
+function ensureHeaders_(sheet, options) {
+  const skipFormat = Boolean(options && options.skipFormat);
+
   if (sheet.getLastRow() === 0) {
     sheet.appendRow(HEADERS);
-    formatReservationSheet_(sheet, HEADERS);
+
+    if (!skipFormat) {
+      formatReservationSheet_(sheet, HEADERS);
+    }
+
     return HEADERS.slice();
   }
 
@@ -434,11 +449,16 @@ function ensureHeaders_(sheet) {
   const headers = sheet.getRange(1, 1, 1, lastColumn).getDisplayValues()[0].map(canonicalHeader_);
   const nextHeaders = buildOrderedHeaders_(headers);
 
-  if (!sameHeaders_(headers, nextHeaders)) {
+  const rebuilt = !sameHeaders_(headers, nextHeaders);
+
+  if (rebuilt) {
     rebuildSheet_(sheet, headers, nextHeaders);
   }
 
-  formatReservationSheet_(sheet, nextHeaders);
+  if (!skipFormat || rebuilt) {
+    formatReservationSheet_(sheet, nextHeaders);
+  }
+
   return nextHeaders;
 }
 
@@ -534,7 +554,7 @@ function appendReservationRow_(sheet, headers, rowData) {
 
 function getNextReservationIdForPhone_(phone, sheet, headers) {
   const reservationSheet = sheet || getReservationSheet_({ skipFormat: true });
-  const reservationHeaders = headers || ensureHeaders_(reservationSheet);
+  const reservationHeaders = headers || ensureHeaders_(reservationSheet, { skipFormat: true });
   const base = getReservationIdBaseForPhone_(phone);
   const maxSequence = getMaxReservationSequenceForBase_(reservationSheet, reservationHeaders, base);
   return `${base}${String(maxSequence + 1).padStart(2, "0")}`;
@@ -655,21 +675,21 @@ function applyColumnFormats_(sheet, headers) {
 }
 
 function applyRowFormats_(sheet, headers, row) {
-  getDateFormatHeaders_().forEach((header) => {
-    const column = getHeaderColumn_(headers, header);
-
-    if (column) {
-      sheet.getRange(row, column).setNumberFormat("yyyy-mm-dd hh:mm");
+  const dateHeaders = toSet_(getDateFormatHeaders_());
+  const textHeaders = toSet_(getTextFormatHeaders_());
+  const formats = headers.map((header) => {
+    if (dateHeaders[header]) {
+      return "yyyy-mm-dd hh:mm";
     }
+
+    if (textHeaders[header]) {
+      return "@";
+    }
+
+    return "General";
   });
 
-  getTextFormatHeaders_().forEach((header) => {
-    const column = getHeaderColumn_(headers, header);
-
-    if (column) {
-      sheet.getRange(row, column).setNumberFormat("@");
-    }
-  });
+  sheet.getRange(row, 1, 1, headers.length).setNumberFormats([formats]);
 }
 
 function repairPhoneColumn_(sheet, headers) {
@@ -859,12 +879,17 @@ function getHeaderColumn_(headers, header) {
 
 function getReservationSpreadsheet_() {
   const properties = PropertiesService.getScriptProperties();
-  const spreadsheetId = properties.getProperty("SPREADSHEET_ID") || FALLBACK_SPREADSHEET_ID;
+  const storedSpreadsheetId = properties.getProperty("SPREADSHEET_ID");
+  const spreadsheetId = storedSpreadsheetId || FALLBACK_SPREADSHEET_ID;
 
   if (spreadsheetId) {
     try {
       const spreadsheet = SpreadsheetApp.openById(spreadsheetId);
-      properties.setProperty("SPREADSHEET_ID", spreadsheet.getId());
+
+      if (storedSpreadsheetId !== spreadsheet.getId()) {
+        properties.setProperty("SPREADSHEET_ID", spreadsheet.getId());
+      }
+
       return spreadsheet;
     } catch (error) {
       if (spreadsheetId !== FALLBACK_SPREADSHEET_ID && FALLBACK_SPREADSHEET_ID) {
@@ -2838,24 +2863,113 @@ function getBookedDates_(targetItemIds) {
 
 function getCachedAvailabilityByDate_(targetItemIds) {
   const cache = CacheService.getScriptCache();
-  const cacheKey = buildAvailabilityCacheKey_(targetItemIds);
+  const cacheKey = buildAvailabilityCacheKey_([]);
   const cachedValue = cache.get(cacheKey);
+  let availability = null;
 
   if (cachedValue) {
     try {
-      return JSON.parse(cachedValue);
+      availability = JSON.parse(cachedValue);
     } catch (error) {
       cache.remove(cacheKey);
     }
   }
 
-  const availability = getAvailabilityByDate_(targetItemIds);
-  cache.put(cacheKey, JSON.stringify(availability), AVAILABILITY_CACHE_SECONDS);
-  return availability;
+  if (!availability) {
+    availability = getStoredAvailability_();
+
+    if (availability) {
+      cache.put(cacheKey, JSON.stringify(availability), AVAILABILITY_CACHE_SECONDS);
+    }
+  }
+
+  if (!availability) {
+    availability = getAvailabilityByDate_([]);
+    cache.put(cacheKey, JSON.stringify(availability), AVAILABILITY_CACHE_SECONDS);
+    storeAvailability_(availability);
+  }
+
+  return filterAvailabilityByItems_(availability, targetItemIds);
+}
+
+function getStoredAvailability_() {
+  const properties = PropertiesService.getScriptProperties();
+  const storedValue = properties.getProperty(AVAILABILITY_CACHE_PROPERTY);
+
+  if (!storedValue) {
+    return null;
+  }
+
+  try {
+    const stored = JSON.parse(storedValue);
+
+    if (!stored.expiresAt || stored.expiresAt <= Date.now() || !stored.availability) {
+      properties.deleteProperty(AVAILABILITY_CACHE_PROPERTY);
+      return null;
+    }
+
+    return stored.availability;
+  } catch (error) {
+    properties.deleteProperty(AVAILABILITY_CACHE_PROPERTY);
+    return null;
+  }
+}
+
+function storeAvailability_(availability) {
+  const storedValue = JSON.stringify({
+    expiresAt: Date.now() + (AVAILABILITY_CACHE_SECONDS * 1000),
+    availability
+  });
+
+  try {
+    PropertiesService.getScriptProperties().setProperty(AVAILABILITY_CACHE_PROPERTY, storedValue);
+  } catch (error) {
+    console.warn(`Unable to persist availability cache: ${error.message}`);
+  }
+}
+
+function filterAvailabilityByItems_(availability, targetItemIds) {
+  const itemIds = normalizeItemIds_(Array.isArray(targetItemIds) ? targetItemIds.join(",") : targetItemIds);
+
+  if (!itemIds.length) {
+    return availability;
+  }
+
+  const requestedLabels = toSet_(itemIds.map(getItemLabel_));
+  const bookedItemsByDate = {};
+  const pendingReservationsByDate = {};
+
+  Object.keys(availability.bookedItemsByDate || {}).forEach((date) => {
+    const matchingItems = (availability.bookedItemsByDate[date] || [])
+      .filter((label) => requestedLabels[label]);
+
+    if (matchingItems.length) {
+      bookedItemsByDate[date] = matchingItems;
+    }
+  });
+
+  Object.keys(availability.pendingReservationsByDate || {}).forEach((date) => {
+    const matchingReservations = (availability.pendingReservationsByDate[date] || [])
+      .map((reservation) => {
+        const matchingItems = (reservation.items || []).filter((label) => requestedLabels[label]);
+
+        return matchingItems.length
+          ? Object.assign({}, reservation, { items: matchingItems })
+          : null;
+      })
+      .filter(Boolean);
+
+    if (matchingReservations.length) {
+      pendingReservationsByDate[date] = matchingReservations;
+    }
+  });
+
+  return { bookedItemsByDate, pendingReservationsByDate };
 }
 
 function clearAvailabilityCache_() {
   CacheService.getScriptCache().removeAll(getAvailabilityCacheKeys_());
+  PropertiesService.getScriptProperties().deleteProperty(AVAILABILITY_CACHE_PROPERTY);
 }
 
 function getAvailabilityCacheKeys_() {
@@ -3059,17 +3173,17 @@ function addBookedItemLabel_(bookedItemsByDate, date, label) {
   }
 }
 
-function getBookedDateSet_(targetItemIds) {
+function getBookedDateSet_(targetItemIds, sheet, headers) {
   const bookedDates = {};
-  const sheet = getReservationSheet_({ skipFormat: true });
+  const reservationSheet = sheet || getReservationSheet_({ skipFormat: true });
 
-  if (sheet.getLastRow() < 2) {
+  if (reservationSheet.getLastRow() < 2) {
     return bookedDates;
   }
 
-  const values = sheet.getDataRange().getValues();
-  const headers = values[0].map(canonicalHeader_);
-  const indexes = buildHeaderIndex_(headers);
+  const values = reservationSheet.getDataRange().getValues();
+  const reservationHeaders = headers || values[0].map(canonicalHeader_);
+  const indexes = buildHeaderIndex_(reservationHeaders);
   const requestedItemSet = toSet_(targetItemIds || []);
   const shouldFilterByItem = Object.keys(requestedItemSet).length > 0;
 
