@@ -23,6 +23,18 @@ const rentalItems = [
     depositNoId: 10000
   },
   {
+    id: "g2-200mm",
+    name: "G2 增距鏡",
+    spec: "200mm",
+    image: "G2 增距鏡 200mm.png",
+    daily: 300,
+    discountedDaily: 250,
+    discountMinDays: 3,
+    minimumRentalDays: 2,
+    depositWithId: 1000,
+    depositNoId: 10000
+  },
+  {
     id: "ray-ban-meta",
     name: "Ray-Ban Meta 智慧眼鏡",
     spec: "方框M",
@@ -39,17 +51,42 @@ const rentalItems = [
   }
 ];
 
-const comboPackage = {
-  id: "combo-vivo-g2",
-  typeLabel: "組合",
-  selectedItemIds: ["vivo-x300-ultra", "g2-ultra-400mm"],
-  image: "vivo x300 ultra + G2 ultra 增距鏡 400mm.jpg",
-  daily: 900,
-  discountedDaily: 750,
-  discountMinDays: 3,
-  depositWithId: 5000,
-  depositNoId: 40000
-};
+const comboPackages = [
+  {
+    id: "combo-vivo-g2",
+    typeLabel: "組合",
+    selectedItemIds: ["vivo-x300-ultra", "g2-ultra-400mm"],
+    image: "vivo x300 ultra + G2 ultra 增距鏡 400mm.jpg",
+    daily: 900,
+    discountedDaily: 750,
+    discountMinDays: 3,
+    depositWithId: 5000,
+    depositNoId: 40000,
+    detailItems: [
+      { name: "vivo X300 Ultra", spec: "12/256GB" },
+      { name: "G2 Ultra 增距鏡", spec: "400mm" },
+      { name: "專用攝影手機殼" },
+      { name: "迷你手機支架1.3M(收縮後僅14CM)" }
+    ]
+  },
+  {
+    id: "combo-vivo-g2-200mm",
+    typeLabel: "組合",
+    selectedItemIds: ["vivo-x300-ultra", "g2-200mm"],
+    image: "vivo x300 ultra + G2 增距鏡 200mm.png",
+    daily: 900,
+    discountedDaily: 750,
+    discountMinDays: 3,
+    depositWithId: 5000,
+    depositNoId: 40000,
+    detailItems: [
+      { name: "vivo X300 Ultra", spec: "12/256GB" },
+      { name: "G2 增距鏡", spec: "200mm" },
+      { name: "專用攝影手機殼" },
+      { name: "迷你手機支架1.3M(收縮後僅14CM)" }
+    ]
+  }
+];
 
 const pickupLocationOptions = [
   { label: "大直捷運站", fee: 0, feeLabel: "+ 0 元" },
@@ -66,6 +103,7 @@ const locationFeeWaiverMinDays = 3;
 const locationPlaceholderOption = { label: "請選擇地點", fee: 0, feeLabel: "+ 0 元" };
 
 const itemMap = new Map(rentalItems.map((item) => [item.id, item]));
+const comboPackageMap = new Map(comboPackages.map((packageInfo) => [packageInfo.id, packageInfo]));
 const addOnItemIds = new Set(rentalItems.filter((item) => item.canCoexist).map((item) => item.id));
 const weekdayFormatter = new Intl.DateTimeFormat("zh-TW", { weekday: "short" });
 const monthFormatter = new Intl.DateTimeFormat("zh-TW", { year: "numeric", month: "long" });
@@ -417,7 +455,7 @@ function renderItemOptions() {
 
 function getPackageOptions() {
   return [
-    getComboPackageInfo(),
+    ...comboPackages.map((packageInfo) => getComboPackageInfo(packageInfo.id)),
     ...rentalItems.map((item) => getSinglePackageInfo(item.id, {
       asAddOnOffer: shouldUseAddOnOffer(item.id)
     }))
@@ -456,7 +494,13 @@ function getSinglePackageInfo(itemId, options = {}) {
   };
 }
 
-function getComboPackageInfo() {
+function getComboPackageInfo(packageId) {
+  const comboPackage = comboPackageMap.get(packageId);
+
+  if (!comboPackage) {
+    return null;
+  }
+
   const components = comboPackage.selectedItemIds.map((itemId) => itemMap.get(itemId));
 
   if (components.some((item) => !item)) {
@@ -596,13 +640,8 @@ function getSummaryDetailItems(packages) {
   const details = [];
 
   packages.forEach((packageInfo) => {
-    if (packageInfo.id === comboPackage.id) {
-      details.push(
-        { name: "vivo X300 Ultra", spec: "12/256GB" },
-        { name: "G2 Ultra 增距鏡", spec: "400mm" },
-        { name: "專用攝影手機殼" },
-        { name: "迷你手機支架1.3M(收縮後僅14CM)" }
-      );
+    if (comboPackageMap.has(packageInfo.id)) {
+      packageInfo.detailItems.forEach((item) => details.push(item));
       return;
     }
 
@@ -807,14 +846,14 @@ function handleItemSelectionChange(event) {
     }
   } else if (!isChecking && previousPackageId === clickedPackageId) {
     selectedPackageId = "";
-  } else if (clickedPackageId === comboPackage.id) {
-    selectedPackageId = comboPackage.id;
+  } else if (comboPackageMap.has(clickedPackageId)) {
+    selectedPackageId = clickedPackageId;
   } else if (
     previousPackageId &&
-    previousPackageId !== comboPackage.id &&
+    !comboPackageMap.has(previousPackageId) &&
     previousPackageId !== clickedPackageId
   ) {
-    selectedPackageId = comboPackage.id;
+    selectedPackageId = getCombinedPackageId(previousPackageId, clickedPackageId) || clickedPackageId;
   } else {
     selectedPackageId = clickedPackageId;
   }
@@ -1623,8 +1662,8 @@ function getPackageInfoById(packageId, options = {}) {
     return null;
   }
 
-  if (packageId === comboPackage.id) {
-    return getComboPackageInfo();
+  if (comboPackageMap.has(packageId)) {
+    return getComboPackageInfo(packageId);
   }
 
   if (packageId.startsWith("single-")) {
@@ -1632,6 +1671,25 @@ function getPackageInfoById(packageId, options = {}) {
   }
 
   return null;
+}
+
+function getCombinedPackageId(firstPackageId, secondPackageId) {
+  const packageIds = [firstPackageId, secondPackageId]
+    .map((packageId) => getPackageInfoById(packageId))
+    .filter(Boolean)
+    .flatMap((packageInfo) => packageInfo.selectedItemIds);
+  const selectedItemIds = [...new Set(packageIds)];
+
+  if (selectedItemIds.length !== 2) {
+    return "";
+  }
+
+  const matchingPackage = comboPackages.find((packageInfo) => (
+    packageInfo.selectedItemIds.length === selectedItemIds.length &&
+    packageInfo.selectedItemIds.every((itemId) => selectedItemIds.includes(itemId))
+  ));
+
+  return matchingPackage?.id || "";
 }
 
 function combinePackageInfo(packages) {
