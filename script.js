@@ -17,6 +17,7 @@ const rentalItems = [
     image: "G2 ultra 增距鏡 400mm.jpg",
     daily: 300,
     discountedDaily: 250,
+    addOnDaily: 200,
     discountMinDays: 3,
     minimumRentalDays: 2,
     depositWithId: 1000,
@@ -29,6 +30,7 @@ const rentalItems = [
     image: "G2 增距鏡 200mm.png?v=product-20260929-2",
     daily: 300,
     discountedDaily: 250,
+    addOnDaily: 200,
     discountMinDays: 3,
     minimumRentalDays: 2,
     depositWithId: 1000,
@@ -495,7 +497,8 @@ function getSinglePackageInfo(itemId, options = {}) {
     return null;
   }
 
-  const asAddOnOffer = Boolean(options.asAddOnOffer && item.canCoexist && item.addOnDaily);
+  const asAddOnOffer = Boolean(options.asAddOnOffer && item.addOnDaily);
+  const waiveMinimumRentalDays = Boolean(options.waiveMinimumRentalDays);
   const typeLabel = asAddOnOffer ? "優惠" : "單租";
   const daily = asAddOnOffer ? item.addOnDaily : item.daily;
   const discountedDaily = asAddOnOffer ? item.addOnDaily : item.discountedDaily;
@@ -514,7 +517,7 @@ function getSinglePackageInfo(itemId, options = {}) {
     daily,
     discountedDaily,
     discountMinDays: item.discountMinDays,
-    minimumRentalDays: asAddOnOffer ? 1 : item.minimumRentalDays || 1,
+    minimumRentalDays: asAddOnOffer || waiveMinimumRentalDays ? 1 : item.minimumRentalDays || 1,
     depositWithId: item.depositWithId,
     depositNoId: item.depositNoId
   };
@@ -864,7 +867,11 @@ function handleItemSelectionChange(event) {
 
   event.target.blur();
 
-  if (isAddOnPackageId(clickedPackageId)) {
+  if (selectedAddOnPackageIds.has(clickedPackageId)) {
+    selectedAddOnPackageIds.delete(clickedPackageId);
+  } else if (isChecking && canSelectAlongsidePackage(clickedPackageId, previousPackageId)) {
+    selectedAddOnPackageIds.add(clickedPackageId);
+  } else if (isAddOnPackageId(clickedPackageId)) {
     if (isChecking) {
       selectedAddOnPackageIds.add(clickedPackageId);
     } else {
@@ -874,6 +881,10 @@ function handleItemSelectionChange(event) {
     selectedPackageId = "";
   } else if (comboPackageMap.has(clickedPackageId)) {
     selectedPackageId = clickedPackageId;
+
+    if (canSelectAlongsidePackage(previousPackageId, clickedPackageId)) {
+      selectedAddOnPackageIds.add(previousPackageId);
+    }
   } else if (
     previousPackageId &&
     !comboPackageMap.has(previousPackageId) &&
@@ -884,6 +895,7 @@ function handleItemSelectionChange(event) {
     selectedPackageId = clickedPackageId;
   }
 
+  pruneAdditionalPackageSelections();
   selectedDates = new Set();
   clearAvailabilityState();
   clearStatus();
@@ -1660,7 +1672,8 @@ function getSelectedPackageIds() {
 function getSelectedPackages() {
   return [...getSelectedPackageIds()]
     .map((packageId) => getPackageInfoById(packageId, {
-      asAddOnOffer: shouldUseSelectedAddOnOffer(packageId)
+      asAddOnOffer: shouldUseSelectedAddOnOffer(packageId),
+      waiveMinimumRentalDays: canSelectAlongsidePackage(packageId, selectedPackageId)
     }))
     .filter(Boolean);
 }
@@ -1785,12 +1798,49 @@ function isAddOnPackageId(packageId) {
   return packageId.startsWith("single-") && addOnItemIds.has(packageId.replace("single-", ""));
 }
 
+function isStandaloneLensPackageId(packageId) {
+  return packageId === "single-g2-ultra-400mm" || packageId === "single-g2-200mm";
+}
+
+function canSelectAlongsidePackage(packageId, basePackageId) {
+  if (!packageId || !basePackageId) {
+    return false;
+  }
+
+  if (isAddOnPackageId(packageId)) {
+    return true;
+  }
+
+  if (!isStandaloneLensPackageId(packageId) || !comboPackageMap.has(basePackageId)) {
+    return false;
+  }
+
+  const itemId = packageId.replace("single-", "");
+  const basePackage = comboPackageMap.get(basePackageId);
+
+  return !basePackage.selectedItemIds.includes(itemId);
+}
+
+function pruneAdditionalPackageSelections() {
+  [...selectedAddOnPackageIds].forEach((packageId) => {
+    if (!isAddOnPackageId(packageId) && !canSelectAlongsidePackage(packageId, selectedPackageId)) {
+      selectedAddOnPackageIds.delete(packageId);
+    }
+  });
+}
+
 function shouldUseAddOnOffer(itemId) {
-  return addOnItemIds.has(itemId) && Boolean(selectedPackageId);
+  return (
+    (addOnItemIds.has(itemId) && Boolean(selectedPackageId)) ||
+    canSelectAlongsidePackage(`single-${itemId}`, selectedPackageId)
+  );
 }
 
 function shouldUseSelectedAddOnOffer(packageId) {
-  return isAddOnPackageId(packageId) && Boolean(selectedPackageId);
+  return (
+    (isAddOnPackageId(packageId) && Boolean(selectedPackageId)) ||
+    canSelectAlongsidePackage(packageId, selectedPackageId)
+  );
 }
 
 function syncPackageInputs() {

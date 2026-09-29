@@ -50,16 +50,20 @@ const TELEGRAM_ITEM_CONFIGS = {
   },
   [ITEM_LENS]: {
     title: "[單租] G2 Ultra 增距鏡",
+    offerTitle: "[優惠] G2 Ultra 增距鏡",
     detail: "G2 Ultra 增距鏡 400mm",
     daily: 300,
     discountedDaily: 250,
+    addOnDaily: 200,
     discountMinDays: 3
   },
   [ITEM_LENS_200]: {
     title: "[單租] G2 增距鏡",
+    offerTitle: "[優惠] G2 增距鏡",
     detail: "G2 增距鏡 200mm",
     daily: 300,
     discountedDaily: 250,
+    addOnDaily: 200,
     discountMinDays: 3
   },
   [ITEM_RAYBAN]: {
@@ -908,8 +912,9 @@ function getTelegramConfig_() {
 
 function buildTelegramReservationMessage_(rowData, requestedDates) {
   const itemIds = normalizeItemIds_(rowData["物品 ID"]);
-  const rentalLines = getTelegramRentalLines_(itemIds, requestedDates);
-  const details = getTelegramDetailItems_(itemIds);
+  const rentalPackageText = rowData["租借物品"];
+  const rentalLines = getTelegramRentalLines_(itemIds, requestedDates, rentalPackageText);
+  const details = getTelegramDetailItems_(itemIds, rentalPackageText);
   const hasDiscount = rentalLines.some((line) => line.hasDiscount);
   const period = formatTelegramCompactPeriod_(requestedDates);
   const discountLabel = hasDiscount ? " ｜ 已套用連租優惠" : "";
@@ -936,17 +941,30 @@ function buildTelegramReservationMessage_(rowData, requestedDates) {
   return lines.join("\n");
 }
 
-function getTelegramRentalLines_(itemIds, dates) {
+function getTelegramRentalLines_(itemIds, dates, rentalPackageText) {
   const itemSet = toSet_(itemIds || []);
   const lines = [];
   const lensItemIds = getSelectedLensItemIds_(itemSet);
-  const hasCombo = itemSet[ITEM_PHONE] && lensItemIds.length;
+  const comboLensItemId = getSelectedComboLensItemId_(itemSet, rentalPackageText);
   const hasBaseItem = itemSet[ITEM_PHONE] || lensItemIds.length;
 
-  if (hasCombo) {
-    lensItemIds.forEach((itemId) => {
-      lines.push(buildTelegramRentalLine_(TELEGRAM_COMBO_CONFIGS[itemId], dates));
-    });
+  if (comboLensItemId) {
+    lines.push(buildTelegramRentalLine_(TELEGRAM_COMBO_CONFIGS[comboLensItemId], dates));
+    lensItemIds
+      .filter((itemId) => itemId !== comboLensItemId)
+      .forEach((itemId) => {
+        const lensConfig = TELEGRAM_ITEM_CONFIGS[itemId];
+        lines.push(buildTelegramRentalLine_(
+          {
+            title: lensConfig.offerTitle,
+            daily: lensConfig.addOnDaily,
+            discountedDaily: lensConfig.addOnDaily,
+            discountMinDays: lensConfig.discountMinDays,
+            isAddOnOffer: true
+          },
+          dates
+        ));
+      });
   } else {
     [ITEM_PHONE, ITEM_LENS, ITEM_LENS_200].forEach((itemId) => {
       if (itemSet[itemId]) {
@@ -999,13 +1017,17 @@ function formatTelegramRentalLines_(rentalLines) {
   ].join("\n")).join("\n");
 }
 
-function getTelegramDetailItems_(itemIds) {
+function getTelegramDetailItems_(itemIds, rentalPackageText) {
   const itemSet = toSet_(itemIds || []);
   const details = [];
   const lensItemIds = getSelectedLensItemIds_(itemSet);
+  const comboLensItemId = getSelectedComboLensItemId_(itemSet, rentalPackageText);
 
-  if (itemSet[ITEM_PHONE] && lensItemIds.length === 1) {
-    TELEGRAM_COMBO_CONFIGS[lensItemIds[0]].details.forEach((detail) => details.push(detail));
+  if (comboLensItemId) {
+    TELEGRAM_COMBO_CONFIGS[comboLensItemId].details.forEach((detail) => details.push(detail));
+    lensItemIds
+      .filter((itemId) => itemId !== comboLensItemId)
+      .forEach((itemId) => details.push(TELEGRAM_ITEM_CONFIGS[itemId].detail));
   } else {
     [ITEM_PHONE, ITEM_LENS, ITEM_LENS_200].forEach((itemId) => {
       if (itemSet[itemId]) {
@@ -1023,6 +1045,30 @@ function getTelegramDetailItems_(itemIds) {
 
 function getSelectedLensItemIds_(itemSet) {
   return [ITEM_LENS, ITEM_LENS_200].filter((itemId) => itemSet[itemId]);
+}
+
+function getSelectedComboLensItemId_(itemSet, rentalPackageText) {
+  if (!itemSet[ITEM_PHONE]) {
+    return "";
+  }
+
+  const lensItemIds = getSelectedLensItemIds_(itemSet);
+
+  if (lensItemIds.length === 1) {
+    return lensItemIds[0];
+  }
+
+  const packageText = text_(rentalPackageText);
+
+  if (/\[組合\][^\[]*G2 Ultra 增距鏡/i.test(packageText)) {
+    return ITEM_LENS;
+  }
+
+  if (/\[組合\][^\[]*G2 增距鏡/i.test(packageText)) {
+    return ITEM_LENS_200;
+  }
+
+  return "";
 }
 
 function formatTelegramDetailLines_(details) {
@@ -1978,7 +2024,7 @@ function buildContractDetailFromReservation_(reservationData) {
     "租借結束時間": dates.length ? formatContractDateTime_(addDaysToDateString_(dates[dates.length - 1], 1)) : "",
     "取機地點": reservationData["取機地點"],
     "還機地點": reservationData["還機地點"],
-    "租借設備清單": getContractEquipmentLines_(itemIds).join("\n"),
+    "租借設備清單": getContractEquipmentLines_(itemIds, reservationData["租借物品"]).join("\n"),
     "預估租金": totalRent || "",
     "總租金": totalRent || "",
     "押金": deposit || "",
@@ -2005,13 +2051,17 @@ function getDefaultPaidDeposit_(rowData) {
   return 500;
 }
 
-function getContractEquipmentLines_(itemIds) {
+function getContractEquipmentLines_(itemIds, rentalPackageText) {
   const itemSet = toSet_(itemIds || []);
   const lines = [];
   const lensItemIds = getSelectedLensItemIds_(itemSet);
+  const comboLensItemId = getSelectedComboLensItemId_(itemSet, rentalPackageText);
 
-  if (itemSet[ITEM_PHONE] && lensItemIds.length === 1) {
-    TELEGRAM_COMBO_CONFIGS[lensItemIds[0]].details.forEach((detail) => lines.push(detail));
+  if (comboLensItemId) {
+    TELEGRAM_COMBO_CONFIGS[comboLensItemId].details.forEach((detail) => lines.push(detail));
+    lensItemIds
+      .filter((itemId) => itemId !== comboLensItemId)
+      .forEach((itemId) => lines.push(ITEM_LABELS[itemId]));
   } else {
     [ITEM_PHONE, ITEM_LENS, ITEM_LENS_200].forEach((itemId) => {
       if (itemSet[itemId]) {
@@ -3173,7 +3223,11 @@ function validate_(data, requestedDates, requestedItemIds) {
     throw new Error("請至少選擇一天租借日期。");
   }
 
-  validateMinimumRentalDays_(requestedDates, requestedItemIds);
+  validateMinimumRentalDays_(
+    requestedDates,
+    requestedItemIds,
+    data.rentalPackage || data.itemNames || data.modelName
+  );
 
   requestedDates.forEach((date) => {
     if (!isValidDateString_(date)) {
@@ -3182,18 +3236,19 @@ function validate_(data, requestedDates, requestedItemIds) {
   });
 }
 
-function validateMinimumRentalDays_(requestedDates, requestedItemIds) {
+function validateMinimumRentalDays_(requestedDates, requestedItemIds, rentalPackageText) {
   if (requestedDates.length >= MINIMUM_SINGLE_RENTAL_DAYS) {
     return;
   }
 
-  const hasPhone = requestedItemIds.indexOf(ITEM_PHONE) !== -1;
-  const selectedLensItemId = [ITEM_LENS, ITEM_LENS_200]
-    .find((itemId) => requestedItemIds.indexOf(itemId) !== -1);
+  const itemSet = toSet_(requestedItemIds || []);
+  const comboLensItemId = getSelectedComboLensItemId_(itemSet, rentalPackageText);
+  const standaloneLensItemId = getSelectedLensItemIds_(itemSet)
+    .find((itemId) => itemId !== comboLensItemId);
   const hasRayBan = requestedItemIds.indexOf(ITEM_RAYBAN) !== -1;
 
-  if (selectedLensItemId && !hasPhone) {
-    const lensTitle = selectedLensItemId === ITEM_LENS_200 ? "G2 增距鏡" : "G2 Ultra 增距鏡";
+  if (standaloneLensItemId && !comboLensItemId) {
+    const lensTitle = standaloneLensItemId === ITEM_LENS_200 ? "G2 增距鏡" : "G2 Ultra 增距鏡";
     throw new Error(`[單租] ${lensTitle} 此物品單租至少需租借 ${MINIMUM_SINGLE_RENTAL_DAYS} 天`);
   }
 
