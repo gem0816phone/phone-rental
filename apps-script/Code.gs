@@ -2167,6 +2167,10 @@ function ensureSheetSize_(sheet, minRows, minColumns) {
 }
 
 function shouldRefreshContractDetailValue_(header, currentValue, nextValue, detail) {
+  if (header === "租借設備清單") {
+    return text_(currentValue) !== text_(nextValue);
+  }
+
   const autoRefreshHeaders = ["預估租金", "總租金", "押金", "已付定金", "剩餘款項"];
 
   if (autoRefreshHeaders.indexOf(header) === -1) {
