@@ -53,6 +53,9 @@ const rentalItems = [
   }
 ];
 
+const lensItemIds = new Set(["g2-ultra-400mm", "g2-200mm"]);
+const cameraCaseDetailItem = { name: "X300 Ultra 專用攝影手機殼" };
+
 const comboPackages = [
   {
     id: "combo-vivo-g2",
@@ -67,7 +70,7 @@ const comboPackages = [
     detailItems: [
       { name: "vivo X300 Ultra", spec: "12/256GB" },
       { name: "G2 Ultra 增距鏡", spec: "400mm" },
-      { name: "專用攝影手機殼" },
+      cameraCaseDetailItem,
       { name: "迷你手機支架1.3M(收縮後僅14CM)" }
     ]
   },
@@ -84,7 +87,7 @@ const comboPackages = [
     detailItems: [
       { name: "vivo X300 Ultra", spec: "12/256GB" },
       { name: "G2 增距鏡", spec: "200mm" },
-      { name: "專用攝影手機殼" },
+      cameraCaseDetailItem,
       { name: "迷你手機支架1.3M(收縮後僅14CM)" }
     ]
   }
@@ -684,6 +687,14 @@ function getSummaryDetailItems(packages) {
       details.push({ name: item.name, spec: item.spec });
     });
   });
+
+  const includesLens = packages.some((packageInfo) => (
+    packageInfo.selectedItemIds.some((itemId) => lensItemIds.has(itemId))
+  ));
+
+  if (includesLens && !details.some((item) => item.name === cameraCaseDetailItem.name)) {
+    details.push(cameraCaseDetailItem);
+  }
 
   return details;
 }

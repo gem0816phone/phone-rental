@@ -7,6 +7,7 @@ const ITEM_PHONE = "vivo-x300-ultra";
 const ITEM_LENS = "g2-ultra-400mm";
 const ITEM_LENS_200 = "g2-200mm";
 const ITEM_RAYBAN = "ray-ban-meta";
+const LENS_CASE_LABEL = "X300 Ultra 專用攝影手機殼";
 const KNOWN_ITEM_IDS = [ITEM_PHONE, ITEM_LENS, ITEM_LENS_200, ITEM_RAYBAN];
 const ITEM_LABELS = {
   [ITEM_PHONE]: "vivo X300 Ultra 12/256GB",
@@ -86,7 +87,7 @@ const TELEGRAM_COMBO_CONFIGS = {
     details: [
       "vivo X300 Ultra 12/256GB",
       "G2 Ultra 增距鏡 400mm",
-      "專用攝影手機殼",
+      LENS_CASE_LABEL,
       "迷你手機支架1.3M(收縮後僅14CM)"
     ]
   },
@@ -98,7 +99,7 @@ const TELEGRAM_COMBO_CONFIGS = {
     details: [
       "vivo X300 Ultra 12/256GB",
       "G2 增距鏡 200mm",
-      "專用攝影手機殼",
+      LENS_CASE_LABEL,
       "迷你手機支架1.3M(收縮後僅14CM)"
     ]
   }
@@ -1063,6 +1064,10 @@ function getTelegramDetailItems_(itemIds, rentalPackageText) {
 
   if (itemSet[ITEM_RAYBAN]) {
     details.push(TELEGRAM_ITEM_CONFIGS[ITEM_RAYBAN].detail);
+  }
+
+  if (lensItemIds.length && details.indexOf(LENS_CASE_LABEL) === -1) {
+    details.push(LENS_CASE_LABEL);
   }
 
   return details;
@@ -2101,6 +2106,10 @@ function getContractEquipmentLines_(itemIds, rentalPackageText) {
 
   if (itemSet[ITEM_RAYBAN]) {
     lines.push(ITEM_LABELS[ITEM_RAYBAN]);
+  }
+
+  if (lensItemIds.length && lines.indexOf(LENS_CASE_LABEL) === -1) {
+    lines.push(LENS_CASE_LABEL);
   }
 
   return lines;
