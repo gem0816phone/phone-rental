@@ -2034,9 +2034,11 @@ function formatContractSheet_(sheet, headers) {
 function buildContractDetailFromReservation_(reservationData) {
   const dates = getDatesFromRowData_(reservationData);
   const itemIds = normalizeItemIds_(reservationData["物品 ID"]);
-  const totalRent = number_(reservationData["預估租金"]) + number_(reservationData["地點加價"]);
+  const totalRent = number_(reservationData["預估租金"]);
+  const locationFee = number_(reservationData["地點加價"]);
   const deposit = number_(reservationData["押金"]);
   const paidDeposit = getDefaultPaidDeposit_(reservationData);
+  const legacyTotalRent = totalRent + locationFee;
 
   return {
     "預約編號": reservationData["預約編號"],
@@ -2058,7 +2060,9 @@ function buildContractDetailFromReservation_(reservationData) {
     "剩餘款項": totalRent || deposit || paidDeposit ? Math.max(totalRent + deposit - paidDeposit, 0) : "",
     "合約文件": "",
     "合約PDF": "",
-    "合約產生時間": ""
+    "合約產生時間": "",
+    _legacyTotalRent: locationFee ? legacyTotalRent : "",
+    _legacyRemainingAmount: locationFee ? Math.max(legacyTotalRent + deposit - paidDeposit, 0) : ""
   };
 }
 
@@ -2127,7 +2131,7 @@ function upsertContractDetail_(sheet, headers, detail) {
   const nextValues = headers.map((header, index) => {
     const currentValue = currentValues[index];
 
-    if (!isNew && shouldRefreshContractDetailValue_(header, currentValue, detail[header])) {
+    if (!isNew && shouldRefreshContractDetailValue_(header, currentValue, detail[header], detail)) {
       return valueOrBlank_(detail, header);
     }
 
@@ -2153,7 +2157,7 @@ function ensureSheetSize_(sheet, minRows, minColumns) {
   }
 }
 
-function shouldRefreshContractDetailValue_(header, currentValue, nextValue) {
+function shouldRefreshContractDetailValue_(header, currentValue, nextValue, detail) {
   const autoRefreshHeaders = ["預估租金", "總租金", "押金", "已付定金", "剩餘款項"];
 
   if (autoRefreshHeaders.indexOf(header) === -1) {
@@ -2168,6 +2172,14 @@ function shouldRefreshContractDetailValue_(header, currentValue, nextValue) {
 
   const currentText = text_(currentValue);
   const currentNumber = number_(currentValue);
+
+  if (header === "預估租金" && currentNumber === number_(detail._legacyTotalRent)) {
+    return true;
+  }
+
+  if (header === "剩餘款項" && currentNumber === number_(detail._legacyRemainingAmount)) {
+    return true;
+  }
 
   return !currentText || currentNumber === 0 || isBlankOrSheetError_(currentText);
 }
