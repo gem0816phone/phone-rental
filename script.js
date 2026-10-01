@@ -271,6 +271,7 @@ const pageLinks = document.querySelectorAll("[data-page-link]");
 
 const today = startOfDay(new Date());
 const bookingWindowDays = 90;
+const standaloneLensOpenWindowDays = 7;
 const maxBookingDate = addDays(today, bookingWindowDays - 1);
 const localBookedDatesByItem = {};
 let visibleMonth = new Date(today.getFullYear(), today.getMonth(), 1);
@@ -1008,7 +1009,8 @@ function renderCalendar() {
     const isPast = date < today;
     const isBeyondBookingWindow = date > maxBookingDate;
     const isFull = canSelectDates && !isBeyondBookingWindow && unavailableDates.has(dateString);
-    const isPending = canSelectDates && !isFull && hasPendingReservations(dateString);
+    const isWaitingOpen = canSelectDates && !isBeyondBookingWindow && !isFull && isStandaloneLensDateWaitingOpen(packageInfo, date);
+    const isPending = canSelectDates && !isFull && !isWaitingOpen && hasPendingReservations(dateString);
     const isSelected = selectedDates.has(dateString);
     const status = isPast
       ? "已過"
@@ -1020,6 +1022,8 @@ function renderCalendar() {
             ? "同步中"
             : isFull
               ? "已滿"
+              : isWaitingOpen
+                ? "待開放"
               : isPending
                 ? "待定"
                 : "可選";
@@ -1029,6 +1033,8 @@ function renderCalendar() {
         ? "status-syncing"
         : isFull
           ? "status-full"
+          : isWaitingOpen
+            ? "status-waiting-open"
           : isPending
             ? "status-pending"
             : "status-available";
@@ -1038,6 +1044,7 @@ function renderCalendar() {
     if (isPast || isBeyondBookingWindow || !hasPackage) classes.push("is-past");
     if (hasPackage && (!isAvailabilityReady || isAvailabilitySyncing)) classes.push("is-syncing");
     if (isFull) classes.push("is-full");
+    if (isWaitingOpen) classes.push("is-waiting-open");
     if (isPending) classes.push("is-pending");
     if (isSelected) classes.push("is-selected");
 
@@ -1047,10 +1054,11 @@ function renderCalendar() {
         type="button"
         data-date="${dateString}"
         data-full="${isFull ? "true" : "false"}"
+        data-waiting-open="${isWaitingOpen ? "true" : "false"}"
         data-pending="${isPending ? "true" : "false"}"
         ${!canSelectDates || isPast || isBeyondBookingWindow ? "disabled" : ""}
         aria-pressed="${isSelected ? "true" : "false"}"
-        aria-label="${dateString} ${status}${isSelected ? "，已選" : ""}${isFull ? "，點擊查看已租物品" : ""}${isPending ? "，點擊查看排隊順位" : ""}"
+        aria-label="${dateString} ${status}${isSelected ? "，已選" : ""}${isFull ? "，點擊查看已租物品" : ""}${isWaitingOpen ? "，點擊查看開放條件" : ""}${isPending ? "，點擊查看排隊順位" : ""}"
       >
         <span class="date-number">${day}</span>
         <span class="date-status ${statusClass}">${status}</span>
@@ -1074,6 +1082,11 @@ function handleCalendarDayClick(button) {
 
   if (button.dataset.full === "true") {
     showBookedDateDialog(button.dataset.date);
+    return;
+  }
+
+  if (button.dataset.waitingOpen === "true") {
+    showStandaloneLensWaitingOpenDialog(button.dataset.date);
     return;
   }
 
@@ -1123,6 +1136,26 @@ function showPendingDateDialog(dateString) {
       ${lines || "<p>目前尚無待確認預約。</p>"}
     </div>
     <p>若未即時聯絡並於12小時內繳交定金<br />檔期將自動釋出給下一順位的客人</p>
+  `;
+  bookedDialog.showModal();
+}
+
+function showStandaloneLensWaitingOpenDialog(dateString) {
+  const dateLabel = formatDateLabel(dateString);
+  const message = "滿足任一條件才開放單租增距鏡：\n手機已出租\n距離租借日期7天內";
+
+  if (!bookedDialog.showModal) {
+    window.alert(`${dateLabel} 待開放\n\n${message}`);
+    return;
+  }
+
+  bookedDialogTitle.textContent = `${dateLabel} 待開放`;
+  bookedDialogBody.innerHTML = `
+    <p>滿足任一條件才開放單租增距鏡：</p>
+    <ul>
+      <li>手機已出租</li>
+      <li>距離租借日期7天內</li>
+    </ul>
   `;
   bookedDialog.showModal();
 }
@@ -1262,6 +1295,13 @@ function showDetailsStep() {
     return;
   }
 
+  const waitingOpenDates = getStandaloneLensWaitingOpenDates(packageInfo, getSelectedDateList());
+
+  if (waitingOpenDates.length) {
+    showStandaloneLensWaitingOpenDialog(waitingOpenDates[0]);
+    return;
+  }
+
   if (!isAvailabilityReadyForPackage(packageInfo)) {
     showDateStep();
     showStatus("warning", "請等待可租狀態同步完成後再填寫資料。");
@@ -1309,6 +1349,14 @@ async function handleSubmit(event) {
   if (minimumRentalViolation) {
     showDateStep();
     showMinimumRentalDialog(minimumRentalViolation);
+    return;
+  }
+
+  const waitingOpenDates = getStandaloneLensWaitingOpenDates(packageInfo, dates);
+
+  if (waitingOpenDates.length) {
+    showDateStep();
+    showStandaloneLensWaitingOpenDialog(waitingOpenDates[0]);
     return;
   }
 
@@ -1816,6 +1864,30 @@ function isAvailabilitySyncingForPackage(packageInfo) {
 
 function getSelectedItemIds() {
   return getPackageInfo()?.selectedItemIds.slice() || [];
+}
+
+function isStandaloneLensOnlySelection(packageInfo) {
+  const itemIds = packageInfo?.selectedItemIds || [];
+  return itemIds.some((itemId) => lensItemIds.has(itemId)) && !itemIds.includes("vivo-x300-ultra");
+}
+
+function isStandaloneLensDateWaitingOpen(packageInfo, date) {
+  if (!isStandaloneLensOnlySelection(packageInfo) || date <= addDays(today, standaloneLensOpenWindowDays)) {
+    return false;
+  }
+
+  return !isPhoneBookedOnDate(toDateInputValue(date));
+}
+
+function getStandaloneLensWaitingOpenDates(packageInfo, dates) {
+  return dates.filter((dateString) => isStandaloneLensDateWaitingOpen(packageInfo, parseDate(dateString)));
+}
+
+function isPhoneBookedOnDate(dateString) {
+  const localPhoneDates = localBookedDatesByItem["vivo-x300-ultra"];
+  const phoneLabel = getItemLabel("vivo-x300-ultra");
+  const bookedLabels = availabilitySnapshot?.payload?.unavailableItemsByDate?.[dateString] || [];
+  return Boolean(localPhoneDates?.has(dateString) || bookedLabels.includes(phoneLabel));
 }
 
 function getSelectedPackageIds() {

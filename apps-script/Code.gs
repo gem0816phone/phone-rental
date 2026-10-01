@@ -16,6 +16,7 @@ const ITEM_LABELS = {
   [ITEM_RAYBAN]: "Ray-Ban Meta 智慧眼鏡 方框M"
 };
 const MINIMUM_SINGLE_RENTAL_DAYS = 2;
+const STANDALONE_LENS_OPEN_WINDOW_DAYS = 7;
 const LOCATION_FEE_WAIVER_MIN_DAYS = 3;
 const AVAILABILITY_CACHE_SECONDS = 120;
 const AVAILABILITY_CACHE_PROPERTY = "AVAILABILITY_CACHE_JSON";
@@ -3373,6 +3374,39 @@ function validate_(data, requestedDates, requestedItemIds) {
       throw new Error(`日期格式不正確：${date}`);
     }
   });
+
+  validateStandaloneLensOpenDates_(requestedDates, requestedItemIds);
+}
+
+function validateStandaloneLensOpenDates_(requestedDates, requestedItemIds) {
+  const itemSet = toSet_(requestedItemIds || []);
+  const hasStandaloneLens = getSelectedLensItemIds_(itemSet).length > 0 && !itemSet[ITEM_PHONE];
+
+  if (!hasStandaloneLens) {
+    return;
+  }
+
+  const today = new Date(`${Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "yyyy-MM-dd")}T00:00:00`);
+  const openThroughDate = new Date(today);
+  openThroughDate.setDate(openThroughDate.getDate() + STANDALONE_LENS_OPEN_WINDOW_DAYS);
+  const datesRequiringPhoneRental = requestedDates.filter((date) => new Date(`${date}T00:00:00`) > openThroughDate);
+
+  if (!datesRequiringPhoneRental.length) {
+    return;
+  }
+
+  const phoneBookedItemsByDate = getCachedAvailabilityByDate_([ITEM_PHONE]).bookedItemsByDate || {};
+  const waitingOpenDate = datesRequiringPhoneRental.find((date) => !(phoneBookedItemsByDate[date] || []).length);
+
+  if (waitingOpenDate) {
+    throw new Error(`${formatStandaloneLensDateLabel_(waitingOpenDate)} 待開放。滿足任一條件才開放單租增距鏡：手機已出租，或距離租借日期7天內。`);
+  }
+}
+
+function formatStandaloneLensDateLabel_(dateString) {
+  const date = new Date(`${dateString}T00:00:00`);
+  const weekdays = ["日", "一", "二", "三", "四", "五", "六"];
+  return `${date.getMonth() + 1}/${date.getDate()}(週${weekdays[date.getDay()]})`;
 }
 
 function validateMinimumRentalDays_(requestedDates, requestedItemIds, rentalPackageText) {

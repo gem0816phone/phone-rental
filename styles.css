@@ -917,6 +917,17 @@ textarea:focus {
   outline: 3px solid rgba(201, 135, 21, 0.14);
 }
 
+.calendar-day.is-waiting-open {
+  border-color: #e4c96f;
+  background: #fffdf3;
+}
+
+.calendar-day.is-waiting-open:not(:disabled):hover,
+.calendar-day.is-waiting-open:not(:disabled):focus {
+  border-color: #b7791f;
+  outline: 3px solid rgba(183, 121, 31, 0.14);
+}
+
 .calendar-day.is-past {
   background: #f2f0eb;
   color: #9ba19a;
@@ -960,6 +971,10 @@ textarea:focus {
 }
 
 .date-status.status-pending {
+  color: #b7791f;
+}
+
+.date-status.status-waiting-open {
   color: #b7791f;
 }
 
