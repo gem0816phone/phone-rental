@@ -119,7 +119,7 @@ const availabilityFetchTimeoutMs = 45000;
 const availabilitySlowNoticeMs = 8000;
 const availabilitySnapshotMaxAgeMs = 120000;
 const availabilitySnapshotStorageKey = "phoneRentalAvailabilitySnapshotV1";
-const showcaseAssetVersion = "showcase-20260929-89";
+const showcaseAssetVersion = "showcase-20261012-90";
 const showcaseCategories = [
   {
     id: "vivo-x300-ultra",
@@ -179,6 +179,16 @@ const showcaseCategories = [
         seatMap: {
           src: "media/showcase/vivo-x300-ultra-g2-400mm-04-position.png",
           alt: "vivo X300 Ultra + G2 Ultra 增距鏡 400mm 座位圖 04"
+        }
+      },
+      {
+        title: "vivo X300 Ultra + G2 Ultra 增距鏡 400mm 05",
+        src: "media/showcase/vivo-x300-ultra-g2-400mm-05.mp4",
+        poster: "media/showcase/vivo-x300-ultra-g2-400mm-05.jpg",
+        ratio: "9 / 16",
+        seatMap: {
+          src: "media/showcase/vivo-x300-ultra-g2-400mm-05-position.png",
+          alt: "vivo X300 Ultra + G2 Ultra 增距鏡 400mm 座位圖 05"
         }
       }
     ]
