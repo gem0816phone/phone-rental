@@ -1250,9 +1250,7 @@ function prepareContractDetail() {
 function generateContractFromSelectedRow() {
   try {
     const context = getSelectedContractContext_();
-    validateContractDetail_(context.rowData);
-    const result = createContractFiles_(context.rowData);
-    const signatureUrl = writeContractResult_(context.sheet, context.headers, context.row, result);
+    const { result, signatureUrl } = generateContractForRow_(context.sheet, context.row);
     showAlert_(`合約書已產生。\n\nGoogle 文件：${result.documentUrl}\nPDF：${result.pdfUrl}\n簽名連結：${signatureUrl}`);
   } catch (error) {
     showAlert_(error.message);
@@ -1582,11 +1580,39 @@ function generateContractFromManager_() {
     throw new Error("尚未建立合約明細，請先勾選「建立/更新合約明細」。");
   }
 
-  const context = getRowContext_(contractSheet, contractRow);
-  validateContractDetail_(context.rowData);
-  const result = createContractFiles_(context.rowData);
-  const signatureUrl = writeContractResult_(contractSheet, contractHeaders, contractRow, result);
+  const { signatureUrl } = generateContractForRow_(contractSheet, contractRow);
   return `合約書已產生：${manager.reservationId}。PDF 與簽名連結已寫入「合約明細」。\n簽名連結：${signatureUrl}`;
+}
+
+function generateContractForRow_(sheet, row) {
+  const lock = LockService.getScriptLock();
+
+  if (!lock.tryLock(30000)) {
+    throw new Error("合約正在處理中，請稍後再試。");
+  }
+
+  try {
+    const context = getRowContext_(sheet, row);
+    assertContractNotGenerated_(context.rowData);
+    validateContractDetail_(context.rowData);
+    const result = createContractFiles_(context.rowData);
+    const signatureUrl = writeContractResult_(sheet, context.headers, row, result);
+    return { result, signatureUrl };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function assertContractNotGenerated_(rowData) {
+  const status = text_(rowData["合約狀態"]);
+  const existingOutputs = [
+    "合約文件", "合約PDF", "合約產生時間", "簽名檔案", "簽署完成PDF", "簽名時間"
+  ];
+
+  if (status === "已產生" || status === "已簽署"
+    || existingOutputs.some((header) => text_(rowData[header]))) {
+    throw new Error("這筆預約已有合約，已停止重複產生。修改合約明細不會更新既有文件或 PDF，請先檢查原合約與簽名連結。");
+  }
 }
 
 function repairContractSignatureLinks_() {
@@ -2135,24 +2161,31 @@ function upsertContractDetail_(sheet, headers, detail) {
   }
 
   ensureSheetSize_(sheet, row, headers.length);
-  const currentValues = isNew
-    ? CONTRACT_HEADERS.map(() => "")
-    : sheet.getRange(row, 1, 1, headers.length).getDisplayValues()[0];
-  const nextValues = headers.map((header, index) => {
-    const currentValue = currentValues[index];
+  if (isNew) {
+    sheet.getRange(row, 1, 1, headers.length)
+      .setValues([headers.map((header) => valueOrBlank_(detail, header))]);
+  } else {
+    const range = sheet.getRange(row, 1, 1, headers.length);
+    const currentValues = range.getDisplayValues()[0];
+    const currentFormulas = range.getFormulas()[0];
+    const rowData = {};
+    headers.forEach((header, index) => { rowData[header] = currentValues[index]; });
+    assertContractNotGenerated_(rowData);
 
-    if (!isNew && shouldRefreshContractDetailValue_(header, currentValue, detail[header], detail)) {
-      return valueOrBlank_(detail, header);
-    }
+    headers.forEach((header, index) => {
+      if (currentFormulas[index]) {
+        return;
+      }
 
-    if (!isNew && text_(currentValue)) {
-      return currentValue;
-    }
+      const currentValue = currentValues[index];
+      const nextValue = valueOrBlank_(detail, header);
+      if ((shouldRefreshContractDetailValue_(header, currentValue, nextValue, detail)
+        || !text_(currentValue)) && nextValue !== "") {
+        sheet.getRange(row, index + 1).setValue(nextValue);
+      }
+    });
+  }
 
-    return valueOrBlank_(detail, header);
-  });
-
-  sheet.getRange(row, 1, 1, headers.length).setValues([nextValues]);
   formatContractSheet_(sheet, headers);
   return row;
 }
@@ -2364,18 +2397,30 @@ function appendContractInfoTable_(body, rowData) {
 
 function appendContractEquipmentTable_(body, rowData) {
   const equipmentLines = splitLines_(rowData["租借設備清單"]);
-  const rows = [["項次", "設備 / 配件", "項次", "設備 / 配件"]];
+  const singleItem = equipmentLines.length === 1;
+  const rows = [singleItem
+    ? ["項次", "設備 / 配件"]
+    : ["項次", "設備 / 配件", "項次", "設備 / 配件"]];
 
   for (let index = 0; index < equipmentLines.length; index += 2) {
     rows.push([
       String(index + 1),
       equipmentLines[index],
-      equipmentLines[index + 1] ? String(index + 2) : null,
-      equipmentLines[index + 1] || null
-    ].filter((cell) => cell !== null));
+      ...(singleItem ? [] : [
+        equipmentLines[index + 1] ? String(index + 2) : "",
+        equipmentLines[index + 1] || ""
+      ])
+    ]);
   }
 
   const table = body.appendTable(rows);
+  if (!singleItem && equipmentLines.length % 2) {
+    const lastRow = table.getRow(table.getNumRows() - 1);
+    lastRow.getCell(3).merge();
+    lastRow.getCell(2).merge();
+    lastRow.getCell(1).clear();
+    lastRow.getCell(1).appendParagraph(equipmentLines[equipmentLines.length - 1]);
+  }
   styleContractTable_(table, { headerRows: 1, labelColumns: [0, 2] });
   setEquipmentTableWidths_(table);
 }
@@ -2641,10 +2686,14 @@ function styleSignatureRow_(table) {
 }
 
 function setEquipmentTableWidths_(table) {
+  const singleItem = table.getRow(0).getNumCells() === 2;
+
   for (let rowIndex = 0; rowIndex < table.getNumRows(); rowIndex += 1) {
     const row = table.getRow(rowIndex);
-    const widths = row.getNumCells() === 2
+    const widths = singleItem
       ? [CONTRACT_ITEM_NUMBER_WIDTH, CONTRACT_TABLE_WIDTH - CONTRACT_ITEM_NUMBER_WIDTH]
+      : row.getNumCells() === 2
+      ? [CONTRACT_ITEM_NUMBER_WIDTH]
       : [
         CONTRACT_ITEM_NUMBER_WIDTH,
         CONTRACT_ITEM_TEXT_WIDTH,
