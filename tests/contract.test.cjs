@@ -21,6 +21,7 @@ function makeTable(rows) {
       };
       row.cells = values.map((value) => ({
         text: value,
+        getText() { return this.text; },
         setWidth(width) { this.width = width; },
         merge() {
           const index = row.cells.indexOf(this);
@@ -171,4 +172,79 @@ test('signature lookup reads the contract row without reformatting the sheet', (
   const result = vm.runInContext('getSignatureContractContext_("G3982501", "token")', context);
   assert.equal(result.sheet, sheet);
   assert.equal(result.row, 2);
+});
+
+test('signed contracts cannot enter the layout repair path', () => {
+  const context = loadScript();
+  context.LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) };
+  context.getRowContext_ = () => ({ rowData: { '合約狀態': '已簽署', '簽名狀態': '已簽署' } });
+  context.getContractFolder_ = () => { throw new Error('must not touch Drive'); };
+  context.sheet = {};
+
+  assert.throws(() => vm.runInContext('repairUnsignedContractEquipmentTable_(sheet, 2)', context), /只能修復/);
+});
+
+test('unsigned one-item repair keeps the original and changes only document links', () => {
+  const context = loadScript();
+  const oldTable = makeTable([['項次', '設備 / 配件', '項次', '設備 / 配件'], ['1', 'vivo X300 Ultra']]);
+  oldTable.getType = () => 'TABLE';
+  oldTable.asTable = () => oldTable;
+  const originalBody = {
+    getNumChildren: () => 1,
+    getChild: () => oldTable,
+    getChildIndex: () => 0
+  };
+  const copiedBody = {
+    children: [oldTable],
+    getChild: () => copiedBody.children[0],
+    insertTable(index, rows) {
+      const replacement = makeTable(rows);
+      copiedBody.children.splice(index, 0, replacement);
+      return replacement;
+    },
+    removeChild(child) { copiedBody.children.splice(copiedBody.children.indexOf(child), 1); }
+  };
+  const file = {
+    getName: () => 'G3982501 設備租借合約書',
+    makeCopy: () => copy
+  };
+  const copy = {
+    getId: () => 'COPY',
+    getUrl: () => 'https://docs.google.com/document/d/COPY/edit',
+    getAs: () => ({ setName() { return this; } })
+  };
+  const pdf = { getUrl: () => 'https://drive.google.com/file/d/NEW/view' };
+  const folder = { createFile: () => pdf };
+  const cells = {};
+  const sheet = { getRange: (row, column) => (cells[column] ||= {
+    setNote(value) { this.note = value; },
+    setValue(value) { this.value = value; }
+  }) };
+  context.LockService = { getScriptLock: () => ({ tryLock: () => true, releaseLock: () => {} }) };
+  context.getRowContext_ = () => ({ headers: ['合約文件', '合約PDF'], rowData: {
+    '合約狀態': '已產生',
+    '簽名狀態': '待簽署',
+    '合約文件': 'https://docs.google.com/document/d/OLD/edit',
+    '合約PDF': 'https://drive.google.com/file/d/OLDPDF/view'
+  } });
+  context.getContractFolder_ = () => folder;
+  context.DriveApp = { getFileById: () => file };
+  context.DocumentApp = { ElementType: { TABLE: 'TABLE' }, openById: (id) => ({
+    getBody: () => id === 'COPY' ? copiedBody : originalBody,
+    saveAndClose: () => {}
+  }) };
+  context.styleContractTable_ = () => {};
+  context.setEquipmentTableWidths_ = () => {};
+  context.shareContractFile_ = () => {};
+  context.Utilities = { sleep: () => {} };
+  context.MimeType = { PDF: 'application/pdf' };
+  context.sheet = sheet;
+
+  vm.runInContext('repairUnsignedContractEquipmentTable_(sheet, 2)', context);
+  assert.equal(originalBody.getChild(0), oldTable);
+  assert.equal(copiedBody.children[0].getRow(0).getNumCells(), 2);
+  assert.equal(copiedBody.children[0].getRow(1).getCell(1).text, 'vivo X300 Ultra');
+  assert.equal(cells[1].value, copy.getUrl());
+  assert.equal(cells[2].value, pdf.getUrl());
+  assert.match(cells[2].note, /OLDPDF/);
 });

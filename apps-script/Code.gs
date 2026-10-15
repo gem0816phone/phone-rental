@@ -278,6 +278,7 @@ function addPhoneRentalMenu_() {
     .addSeparator()
     .addItem("建立/更新合約明細", "prepareContractDetail")
     .addItem("產生合約書", "generateContractFromSelectedRow")
+    .addItem("修復未簽署合約的設備表格", "repairSelectedUnsignedContractEquipmentTable")
     .addItem("修復已簽署PDF", "repairSignedContractPdfs")
     .addToUi();
   } catch (error) {
@@ -1258,6 +1259,24 @@ function generateContractFromSelectedRow() {
   }
 }
 
+function repairSelectedUnsignedContractEquipmentTable() {
+  try {
+    const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+    const sheet = spreadsheet && spreadsheet.getActiveSheet();
+
+    if (!sheet || sheet.getName() !== CONTRACT_SHEET_NAME) {
+      throw new Error("請先到「合約明細」選取要修復的資料列。");
+    }
+
+    const context = getSelectedRowContext_(sheet);
+    const result = repairUnsignedContractEquipmentTable_(sheet, context.row);
+    showAlert_(`已保留原檔並建立修正版。\nGoogle 文件：${result.documentUrl}\nPDF：${result.pdfUrl}`);
+  } catch (error) {
+    showAlert_(error.message);
+    throw error;
+  }
+}
+
 function markSelectedReservationConfirmed() {
   updateSelectedReservationStatus_("已確認");
 }
@@ -1617,6 +1636,90 @@ function assertContractNotGenerated_(rowData) {
   if (status === "已產生" || status === "已簽署"
     || existingOutputs.some((header) => text_(rowData[header]))) {
     throw new Error("這筆預約已有合約，已停止重複產生。修改合約明細不會更新既有文件或 PDF，請先檢查原合約與簽名連結。");
+  }
+}
+
+function repairUnsignedContractEquipmentTable_(sheet, row) {
+  const lock = LockService.getScriptLock();
+
+  if (!lock.tryLock(30000)) {
+    throw new Error("合約正在處理中，請稍後再試。");
+  }
+
+  try {
+    const context = getRowContext_(sheet, row);
+    const data = context.rowData;
+
+    if (text_(data["合約狀態"]) !== "已產生"
+      || text_(data["簽名狀態"]) !== "待簽署"
+      || ["簽名檔案", "簽署完成PDF", "簽名時間"].some((header) => text_(data[header]))) {
+      throw new Error("只能修復已產生、尚未簽署的合約；已簽署文件不會變更。");
+    }
+
+    const documentId = getDriveFileIdFromUrl_(data["合約文件"]);
+    const oldPdfUrl = text_(data["合約PDF"]);
+    const documentColumn = getHeaderColumn_(context.headers, "合約文件");
+    const pdfColumn = getHeaderColumn_(context.headers, "合約PDF");
+
+    if (!documentId || !oldPdfUrl || !documentColumn || !pdfColumn) {
+      throw new Error("找不到原合約文件或 PDF，請先檢查這列的連結。");
+    }
+
+    const folder = getContractFolder_();
+    const originalFile = DriveApp.getFileById(documentId);
+    const originalBody = DocumentApp.openById(documentId).getBody();
+    let equipmentTable = null;
+
+    for (let index = 0; index < originalBody.getNumChildren(); index += 1) {
+      const child = originalBody.getChild(index);
+
+      if (child.getType() !== DocumentApp.ElementType.TABLE) {
+        continue;
+      }
+
+      const table = child.asTable();
+      if (table.getNumRows() === 2 && table.getRow(0).getNumCells() === 4
+        && text_(table.getRow(0).getCell(0).getText()) === "項次") {
+        equipmentTable = table;
+        break;
+      }
+    }
+
+    if (!equipmentTable || equipmentTable.getRow(1).getNumCells() !== 2) {
+      throw new Error("這份文件不是單件設備的舊版四欄表格，已停止修復。");
+    }
+
+    const item = text_(equipmentTable.getRow(1).getCell(1).getText());
+    if (!item) {
+      throw new Error("原設備欄位是空的，已停止修復。");
+    }
+
+    const tableIndex = originalBody.getChildIndex(equipmentTable);
+    const copyName = sanitizeFilename_(`${originalFile.getName()} 設備表格修正版`);
+    const documentFile = originalFile.makeCopy(copyName, folder);
+    const document = DocumentApp.openById(documentFile.getId());
+    const body = document.getBody();
+    equipmentTable = body.getChild(tableIndex).asTable();
+    const replacement = body.insertTable(tableIndex, [["項次", "設備 / 配件"], ["1", item]]);
+    styleContractTable_(replacement, { headerRows: 1, labelColumns: [0] });
+    setEquipmentTableWidths_(replacement);
+    body.removeChild(equipmentTable);
+    document.saveAndClose();
+    Utilities.sleep(300);
+
+    shareContractFile_(documentFile);
+    const pdfFile = folder.createFile(documentFile.getAs(MimeType.PDF).setName(`${copyName}.pdf`));
+    shareContractFile_(pdfFile);
+
+    const documentCell = sheet.getRange(row, documentColumn);
+    const pdfCell = sheet.getRange(row, pdfColumn);
+    documentCell.setValue(documentFile.getUrl());
+    pdfCell.setValue(pdfFile.getUrl());
+    documentCell.setNote(`修復前文件：${text_(data["合約文件"])}`);
+    pdfCell.setNote(`修復前 PDF：${oldPdfUrl}`);
+    return { documentUrl: documentFile.getUrl(), pdfUrl: pdfFile.getUrl() };
+  } finally {
+    lock.releaseLock();
   }
 }
 
