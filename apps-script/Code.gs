@@ -1515,8 +1515,13 @@ function getSignatureContractContext_(reservationId, signatureToken) {
     throw new Error("簽名連結缺少必要資訊，請向店家索取新的簽名連結。");
   }
 
-  const sheet = getContractSheet_();
-  const headers = ensureContractHeaders_(sheet);
+  const sheet = getReservationSpreadsheet_().getSheetByName(CONTRACT_SHEET_NAME);
+
+  if (!sheet) {
+    throw new Error("找不到合約明細，請向店家確認合約是否已建立。");
+  }
+
+  const headers = getSheetHeaders_(sheet);
   const row = findRowByHeaderValue_(sheet, headers, "預約編號", targetId);
 
   if (!row) {

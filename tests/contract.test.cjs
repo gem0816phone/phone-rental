@@ -157,3 +157,18 @@ test('generated contract detail is not refreshed over its linked files', () => {
   assert.throws(() => vm.runInContext('upsertContractDetail_(sheet, headers, detail)', context), /已有合約/);
   assert.deepEqual(writes, []);
 });
+
+test('signature lookup reads the contract row without reformatting the sheet', () => {
+  const context = loadScript();
+  const sheet = {};
+  context.getReservationSpreadsheet_ = () => ({ getSheetByName: () => sheet });
+  context.getContractSheet_ = () => { throw new Error('unexpected sheet formatting'); };
+  context.ensureContractHeaders_ = () => { throw new Error('unexpected header formatting'); };
+  context.getSheetHeaders_ = () => ['預約編號', '簽名金鑰'];
+  context.findRowByHeaderValue_ = () => 2;
+  context.getRowContext_ = () => ({ sheet, row: 2, rowData: { '預約編號': 'G3982501', '簽名金鑰': 'token' } });
+
+  const result = vm.runInContext('getSignatureContractContext_("G3982501", "token")', context);
+  assert.equal(result.sheet, sheet);
+  assert.equal(result.row, 2);
+});
