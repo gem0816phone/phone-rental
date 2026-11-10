@@ -119,7 +119,7 @@ const availabilityFetchTimeoutMs = 45000;
 const availabilitySlowNoticeMs = 8000;
 const availabilitySnapshotMaxAgeMs = 120000;
 const availabilitySnapshotStorageKey = "phoneRentalAvailabilitySnapshotV1";
-const showcaseAssetVersion = "showcase-20261012-90";
+const showcaseAssetVersion = "showcase-20261110-91";
 const showcaseCategories = [
   {
     id: "vivo-x300-ultra",
@@ -133,6 +133,16 @@ const showcaseCategories = [
         seatMap: {
           src: "media/showcase/vivo-x300-ultra-01-position.png",
           alt: "vivo X300 Ultra 座位圖"
+        }
+      },
+      {
+        title: "vivo X300 Ultra 02",
+        src: "media/showcase/vivo-x300-ultra-02.mp4",
+        poster: "media/showcase/vivo-x300-ultra-02.jpg",
+        ratio: "9 / 16",
+        seatMap: {
+          src: "media/showcase/vivo-x300-ultra-02-position.png",
+          alt: "vivo X300 Ultra 座位圖 02"
         }
       }
     ]
@@ -190,6 +200,16 @@ const showcaseCategories = [
           src: "media/showcase/vivo-x300-ultra-g2-400mm-05-position.png",
           alt: "vivo X300 Ultra + G2 Ultra 增距鏡 400mm 座位圖 05"
         }
+      },
+      {
+        title: "vivo X300 Ultra + G2 Ultra 增距鏡 400mm 06",
+        src: "media/showcase/vivo-x300-ultra-g2-400mm-06.mp4",
+        poster: "media/showcase/vivo-x300-ultra-g2-400mm-06.jpg",
+        ratio: "9 / 16",
+        seatMap: {
+          src: "media/showcase/vivo-x300-ultra-g2-400mm-06-position.png",
+          alt: "vivo X300 Ultra + G2 Ultra 增距鏡 400mm 座位圖 06"
+        }
       }
     ]
   },
@@ -205,6 +225,16 @@ const showcaseCategories = [
         seatMap: {
           src: "media/showcase/vivo-x300-ultra-g2-200mm-01-position.png",
           alt: "vivo X300 Ultra + G2 增距鏡 200mm 座位圖"
+        }
+      },
+      {
+        title: "vivo X300 Ultra + G2 增距鏡 200mm 02",
+        src: "media/showcase/vivo-x300-ultra-g2-200mm-02.mp4",
+        poster: "media/showcase/vivo-x300-ultra-g2-200mm-02.jpg",
+        ratio: "9 / 16",
+        seatMap: {
+          src: "media/showcase/vivo-x300-ultra-g2-200mm-02-position.png",
+          alt: "vivo X300 Ultra + G2 增距鏡 200mm 座位圖 02"
         }
       }
     ]
